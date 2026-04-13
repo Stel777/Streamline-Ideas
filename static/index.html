@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Streamline Ideas</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body x-data="streamlineApp()" x-init="init()">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" :class="{ open: sidebarOpen }">
+    <div class="sidebar-header">
+      <span class="sidebar-title">Past Ideas</span>
+      <button class="icon-btn" @click="sidebarOpen = false">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="sidebar-list">
+      <template x-if="history.length === 0">
+        <p class="sidebar-empty">No saved ideas yet.</p>
+      </template>
+      <template x-for="item in history" :key="item.session_id">
+        <button class="sidebar-item" @click="loadSession(item.session_id)">
+          <span class="sidebar-item-title" x-text="item.title"></span>
+          <span class="sidebar-item-sub" x-text="item.one_liner"></span>
+        </button>
+      </template>
+    </div>
+  </aside>
+  <div class="sidebar-overlay" x-show="sidebarOpen" @click="sidebarOpen = false"></div>
+
+  <!-- App -->
+  <div class="app-shell">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <button class="icon-btn" @click="toggleSidebar()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+      <div class="logo">
+        <span class="logo-mark">✦</span>
+        <span class="logo-text">Streamline</span>
+      </div>
+      <button class="icon-btn new-btn" @click="resetAll()" x-show="state !== 'idle'" title="New idea">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <div x-show="state === 'idle'" style="width:36px"></div>
+    </header>
+
+    <!-- IDLE -->
+    <main class="stage" x-show="state === 'idle'">
+      <div class="landing">
+        <p class="landing-eyebrow">Your ideas, realized</p>
+        <h1 class="landing-title">Turn your voice<br>into a prototype.</h1>
+        <p class="landing-sub">Speak your idea. Watch it come to life.</p>
+
+        <div class="action-row">
+          <div class="action-card"
+            @dragover.prevent="dragOver = true"
+            @dragleave="dragOver = false"
+            @drop.prevent="handleDrop($event)"
+            :class="{ 'drag-active': dragOver }"
+            @click="$refs.fileInput.click()">
+            <div class="action-icon-wrap upload-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            </div>
+            <div class="action-text">
+              <span class="action-label">Upload Memo</span>
+              <span class="action-sub">m4a · mp3 · wav · webm</span>
+            </div>
+            <input type="file" accept=".m4a,.mp3,.wav,.webm,.ogg,.mp4" x-ref="fileInput" style="display:none" @change="handleFileSelect($event)" />
+          </div>
+
+          <div class="action-divider">or</div>
+
+          <div class="action-card primary-card" @click="startRecording()">
+            <div class="action-icon-wrap record-icon">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 1a3 3 0 00-3 3v8a3 3 0 006 0V4a3 3 0 00-3-3z"/><path d="M19 10v2a7 7 0 01-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            </div>
+            <div class="action-text">
+              <span class="action-label">Record Live</span>
+              <span class="action-sub">Use your microphone</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- RECORDING with live transcript -->
+    <main class="stage center" x-show="state === 'recording'">
+      <div class="recording-ui">
+        <div class="record-pill">
+          <span class="rec-dot"></span>
+          <span class="rec-label">Recording</span>
+          <span class="rec-timer" x-text="formatTime(recordingSeconds)"></span>
+        </div>
+
+        <div class="waveform">
+          <template x-for="i in 20" :key="i">
+            <div class="wave-bar" :style="`animation-delay:${(i-1)*0.07}s; animation-duration:${0.6 + (i%4)*0.15}s`"></div>
+          </template>
+        </div>
+
+        <!-- Live transcript preview -->
+        <div class="live-transcript-wrap">
+          <p class="live-transcript-label">Transcribing live...</p>
+          <div class="live-transcript-box">
+            <span x-show="!liveTranscript" class="live-placeholder">Start speaking — your words will appear here.</span>
+            <span x-show="liveTranscript" x-text="liveTranscript" class="live-text"></span>
+          </div>
+        </div>
+
+        <button class="btn-done" @click="stopRecording()">
+          Done
+        </button>
+      </div>
+    </main>
+
+    <!-- TRANSCRIBING -->
+    <main class="stage center" x-show="state === 'transcribing'">
+      <div class="loader-ui">
+        <div class="loader-ring"></div>
+        <p class="loader-label">Transcribing audio</p>
+        <p class="loader-sub">Just a moment...</p>
+      </div>
+    </main>
+
+    <!-- TRANSCRIPT: Edit & confirm -->
+    <main class="stage" x-show="state === 'transcript'">
+      <div class="transcript-panel">
+        <h2 class="panel-title">Review your idea</h2>
+        <p class="panel-sub">Edit anything before generating your concept.</p>
+        <textarea class="transcript-box" x-model="transcript" rows="7" placeholder="Your transcribed idea will appear here..."></textarea>
+        <div class="transcript-actions">
+          <button class="btn-ghost" @click="copyTranscript()" x-text="copied ? 'Copied' : 'Copy'"></button>
+          <button class="btn-primary" @click="generateConcept()" :disabled="!transcript.trim()">
+            Generate Concept
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+      </div>
+    </main>
+
+    <!-- GENERATING -->
+    <main class="stage center" x-show="state === 'generating'">
+      <div class="loader-ui">
+        <div class="loader-ring accent"></div>
+        <p class="loader-label">Building your concept</p>
+        <p class="loader-sub">This takes 30–90 seconds on local AI.</p>
+      </div>
+    </main>
+
+    <!-- RESULT -->
+    <main class="stage result-stage" x-show="state === 'result'">
+      <div class="result-layout">
+
+        <div class="concept-panel">
+          <div class="concept-card">
+            <span class="concept-tag">Concept</span>
+            <h2 class="concept-title" x-text="result.title"></h2>
+            <p class="concept-oneliner" x-text="result.one_liner"></p>
+            <div class="divider"></div>
+            <div class="concept-row">
+              <div class="concept-field">
+                <div class="field-label">Problem</div>
+                <p x-text="result.problem"></p>
+              </div>
+              <div class="concept-field">
+                <div class="field-label">Solution</div>
+                <p x-text="result.solution"></p>
+              </div>
+            </div>
+            <div class="concept-field">
+              <div class="field-label">Key Features</div>
+              <ul class="feature-list">
+                <template x-for="f in result.key_features" :key="f">
+                  <li x-text="f"></li>
+                </template>
+              </ul>
+            </div>
+            <div class="concept-field">
+              <div class="field-label">For</div>
+              <p x-text="result.target_user"></p>
+            </div>
+          </div>
+
+          <div class="result-actions">
+            <button class="btn-ghost" @click="regenerate()">Regenerate</button>
+            <button class="btn-ghost" @click="downloadPrototype()">Save HTML</button>
+            <button class="btn-primary" @click="resetAll()">
+              New Idea
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="prototype-panel">
+          <div class="prototype-bar">
+            <div class="proto-dots"><span></span><span></span><span></span></div>
+            <span class="proto-label">Live Preview</span>
+          </div>
+          <iframe class="prototype-frame" sandbox="allow-scripts allow-forms" :srcdoc="result.prototype_html"></iframe>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- Error toast -->
+    <div class="toast" x-show="errorMsg" x-transition x-text="errorMsg" @click="errorMsg = ''"></div>
+
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
