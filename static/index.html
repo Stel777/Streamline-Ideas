@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/style.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
-<body x-data="streamlineApp()" x-init="init()">
+<body x-data="{ ...streamlineApp(), exportOpen: false }" x-init="init()">
 
   <!-- Sidebar -->
   <aside class="sidebar" :class="{ open: sidebarOpen }">
@@ -190,7 +190,10 @@
 
           <div class="result-actions">
             <button class="btn-ghost" @click="regenerate()">Regenerate</button>
-            <button class="btn-ghost" @click="downloadPrototype()">Save HTML</button>
+            <button class="btn-ghost export-btn" @click="exportOpen = true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Export
+            </button>
             <button class="btn-primary" @click="resetAll()">
               New Idea
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
@@ -203,11 +206,64 @@
             <div class="proto-dots"><span></span><span></span><span></span></div>
             <span class="proto-label">Live Preview</span>
           </div>
-          <iframe class="prototype-frame" sandbox="allow-scripts allow-forms" :srcdoc="result.prototype_html"></iframe>
+          <iframe class="prototype-frame" id="prototype-frame" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
         </div>
 
       </div>
     </main>
+
+    <!-- Export modal -->
+    <div class="modal-overlay" x-show="exportOpen" x-transition @click.self="exportOpen = false">
+      <div class="modal" @click.stop>
+        <div class="modal-header">
+          <h3 class="modal-title">Export Idea</h3>
+          <button class="icon-btn" @click="exportOpen = false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <p class="modal-sub">Choose a format to export your idea. Each file can be handed to Claude Code to build and improve it.</p>
+
+        <div class="export-list">
+
+          <button class="export-option" @click="exportMarkdown(); exportOpen = false">
+            <div class="export-option-icon">📄</div>
+            <div class="export-option-text">
+              <div class="export-option-title">Markdown Brief</div>
+              <div class="export-option-desc">Concept summary in plain text. Best for pasting into Claude Code as context.</div>
+            </div>
+            <div class="export-option-size">~3 KB</div>
+          </button>
+
+          <button class="export-option" @click="exportClaudePrompt(); exportOpen = false">
+            <div class="export-option-icon">⚡</div>
+            <div class="export-option-text">
+              <div class="export-option-title">Claude Code Prompt</div>
+              <div class="export-option-desc">Ready-to-paste prompt with full context. Open Claude Code and paste directly.</div>
+            </div>
+            <div class="export-option-size">~5 KB</div>
+          </button>
+
+          <button class="export-option" @click="exportHTML(); exportOpen = false">
+            <div class="export-option-icon">🌐</div>
+            <div class="export-option-text">
+              <div class="export-option-title">Prototype HTML</div>
+              <div class="export-option-desc">Standalone HTML file. Open in any browser or give to Claude Code to expand.</div>
+            </div>
+            <div class="export-option-size">~30 KB</div>
+          </button>
+
+          <button class="export-option" @click="exportJSON(); exportOpen = false">
+            <div class="export-option-icon">🗂️</div>
+            <div class="export-option-text">
+              <div class="export-option-title">Full JSON Package</div>
+              <div class="export-option-desc">Complete concept + prototype as structured data. For developers.</div>
+            </div>
+            <div class="export-option-size">~35 KB</div>
+          </button>
+
+        </div>
+      </div>
+    </div>
 
     <!-- Error toast -->
     <div class="toast" x-show="errorMsg" x-transition x-text="errorMsg" @click="errorMsg = ''"></div>

@@ -41,6 +41,8 @@ function streamlineApp() {
         this.transcript = this.result.transcript || '';
         this.state = 'result';
         this.sidebarOpen = false;
+        await this.$nextTick();
+        this._renderPrototype(this.result.prototype_html);
       } catch {
         this.showError('Could not load session.');
       }
@@ -161,10 +163,19 @@ function streamlineApp() {
         this.result = data;
         this.state = 'result';
         this.loadHistory();
+        // Render prototype into iframe after DOM updates
+        await this.$nextTick();
+        this._renderPrototype(data.prototype_html);
       } catch (err) {
         this.showError(err.message);
         this.state = 'transcript';
       }
+    },
+
+    _renderPrototype(html) {
+      const frame = document.getElementById('prototype-frame');
+      if (!frame || !html) return;
+      frame.srcdoc = html;
     },
 
     async regenerate() {
@@ -182,13 +193,81 @@ function streamlineApp() {
       });
     },
 
-    downloadPrototype() {
-      const blob = new Blob([this.result.prototype_html], { type: 'text/html' });
+    _download(content, filename, type) {
+      const blob = new Blob([content], { type });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `${(this.result.title || 'prototype').replace(/\s+/g, '-').toLowerCase()}.html`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(a.href);
+    },
+
+    _slug() {
+      return (this.result.title || 'idea').replace(/\s+/g, '-').toLowerCase();
+    },
+
+    exportHTML() {
+      this._download(this.result.prototype_html, `${this._slug()}-prototype.html`, 'text/html');
+    },
+
+    exportJSON() {
+      this._download(JSON.stringify(this.result, null, 2), `${this._slug()}.json`, 'application/json');
+    },
+
+    exportMarkdown() {
+      const r = this.result;
+      const md = `# ${r.title}
+
+> ${r.one_liner}
+
+## Problem
+${r.problem}
+
+## Solution
+${r.solution}
+
+## Key Features
+${(r.key_features || []).map(f => `- ${f}`).join('\n')}
+
+## Target User
+${r.target_user}
+
+---
+*Original transcript:*
+> ${r.transcript}
+`;
+      this._download(md, `${this._slug()}-brief.md`, 'text/markdown');
+    },
+
+    exportClaudePrompt() {
+      const r = this.result;
+      const prompt = `# Build and improve this app idea: ${r.title}
+
+## Concept
+${r.one_liner}
+
+**Problem:** ${r.problem}
+**Solution:** ${r.solution}
+**Target user:** ${r.target_user}
+
+**Key features:**
+${(r.key_features || []).map(f => `- ${f}`).join('\n')}
+
+## Starting prototype (HTML)
+Below is a rough prototype I generated. Please use it as a reference for the UI direction, then build a proper, production-quality implementation with clean code structure, real functionality, and improvements.
+
+\`\`\`html
+${r.prototype_html}
+\`\`\`
+
+## Instructions
+1. Analyse the prototype and concept above
+2. Build a well-structured, production-ready version of this app
+3. Improve the UI/UX beyond the prototype
+4. Add any missing functionality that makes sense for the concept
+5. Use modern best practices for whatever stack you choose
+`;
+      this._download(prompt, `${this._slug()}-claude-prompt.md`, 'text/markdown');
     },
 
     resetAll() {
