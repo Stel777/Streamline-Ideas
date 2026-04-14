@@ -49,7 +49,7 @@ if USE_CLOUD:
     print("Mode: Cloud (Gemini API)")
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel("gemini-2.5-flash")
+    gemini_model = genai.GenerativeModel("gemini-2.0-flash")
 else:
     print("Mode: Local (Ollama + faster-whisper)")
     import requests
@@ -120,14 +120,35 @@ def _mime_type(ext: str) -> str:
     }.get(ext, "audio/webm")
 
 
+def _gemini_with_retry(fn, retries=3):
+    import time
+    for attempt in range(retries):
+        try:
+            return fn()
+        except Exception as e:
+            msg = str(e)
+            if '429' in msg and attempt < retries - 1:
+                # Extract retry delay from error or use exponential backoff
+                import re as _re
+                match = _re.search(r'retry in (\d+)', msg)
+                wait = int(match.group(1)) + 2 if match else (2 ** attempt) * 10
+                print(f"Rate limited, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
+    raise RuntimeError("Max retries exceeded")
+
+
 def _transcribe_cloud(audio_path: Path) -> str:
     ext = audio_path.suffix.lower()
     with open(audio_path, "rb") as f:
         audio_data = f.read()
-    response = gemini_model.generate_content([
+    encoded = base64.b64encode(audio_data).decode()
+    mime = _mime_type(ext)
+    response = _gemini_with_retry(lambda: gemini_model.generate_content([
         TRANSCRIBE_PROMPT,
-        {"mime_type": _mime_type(ext), "data": base64.b64encode(audio_data).decode()}
-    ])
+        {"mime_type": mime, "data": encoded}
+    ]))
     return response.text.strip()
 
 
@@ -137,7 +158,8 @@ def _transcribe_local(audio_path: Path) -> str:
 
 
 def _generate_cloud(transcript: str) -> str:
-    response = gemini_model.generate_content(CONCEPT_PROMPT + transcript)
+    prompt = CONCEPT_PROMPT + transcript
+    response = _gemini_with_retry(lambda: gemini_model.generate_content(prompt))
     return response.text
 
 
