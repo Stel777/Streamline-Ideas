@@ -39,12 +39,12 @@ def _check_rate_limit():
     _rate["count"] += 1
 
 # ── Provider setup ─────────────────────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY")
-USE_CLOUD      = bool(GEMINI_API_KEY or GROQ_API_KEY)
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+USE_CLOUD       = bool(GEMINI_API_KEY or MISTRAL_API_KEY)
 
-gemini_model = None
-groq_client  = None
+gemini_model   = None
+mistral_client = None
 
 if GEMINI_API_KEY:
     import google.generativeai as genai
@@ -52,10 +52,10 @@ if GEMINI_API_KEY:
     gemini_model = genai.GenerativeModel("gemini-2.0-flash")
     print("Provider ready: Gemini 2.0 Flash")
 
-if GROQ_API_KEY:
-    from groq import Groq
-    groq_client = Groq(api_key=GROQ_API_KEY)
-    print("Provider ready: Groq (Llama + Whisper)")
+if MISTRAL_API_KEY:
+    from mistralai import Mistral
+    mistral_client = Mistral(api_key=MISTRAL_API_KEY)
+    print("Provider ready: Mistral")
 
 if not USE_CLOUD:
     print("Mode: Local (Ollama + faster-whisper)")
@@ -67,6 +67,8 @@ if not USE_CLOUD:
     print(f"Loading Whisper '{WHISPER_MODEL_SIZE}' model...")
     whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
     print("Whisper model ready.")
+else:
+    whisper_model = None
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
 TRANSCRIBE_PROMPT = "Transcribe this audio accurately. Return only the transcription text, nothing else."
@@ -130,62 +132,46 @@ def _transcribe_gemini(audio_path: Path) -> str:
     ])
     return response.text.strip()
 
-def _transcribe_groq(audio_path: Path) -> str:
-    with open(audio_path, "rb") as f:
-        result = groq_client.audio.transcriptions.create(
-            file=(audio_path.name, f.read()),
-            model="whisper-large-v3-turbo",
-        )
-    return result.text.strip()
+def _transcribe_mistral(audio_path: Path) -> str:
+    # Mistral doesn't have audio transcription — fall through to next provider
+    raise NotImplementedError("Mistral does not support audio transcription")
 
 def _transcribe_local(audio_path: Path, beam_size=5) -> str:
     segments, _ = whisper_model.transcribe(str(audio_path), beam_size=beam_size)
     return " ".join(s.text.strip() for s in segments).strip()
 
 def transcribe_with_fallback(audio_path: Path) -> tuple[str, str]:
-    """Returns (transcript, provider_used)"""
-    providers = []
+    """Returns (transcript, provider_used). Gemini only for now — Mistral has no audio API."""
     if gemini_model:
-        providers.append(("Gemini", _transcribe_gemini))
-    if groq_client:
-        providers.append(("Groq Whisper", _transcribe_groq))
-
-    last_err = None
-    for name, fn in providers:
-        try:
-            print(f"Transcribing with {name}...")
-            return fn(audio_path), name
-        except Exception as e:
-            if _is_rate_limit(e):
-                wait = _retry_delay(e)
-                print(f"{name} rate limited, trying next provider... (or wait {wait}s)")
-                last_err = e
-                continue
-            raise  # non-rate-limit errors bubble up immediately
-
-    # All providers rate limited — wait and retry first available
-    if last_err and providers:
-        wait = _retry_delay(last_err)
-        print(f"All providers rate limited. Waiting {wait}s then retrying...")
-        time.sleep(wait)
-        name, fn = providers[0]
-        return fn(audio_path), name
-
-    raise last_err or RuntimeError("No transcription providers available")
+        last_err = None
+        for attempt in range(3):
+            try:
+                print("Transcribing with Gemini...")
+                return _transcribe_gemini(audio_path), "Gemini"
+            except Exception as e:
+                if _is_rate_limit(e):
+                    wait = _retry_delay(e)
+                    print(f"Gemini rate limited, waiting {wait}s (attempt {attempt+1}/3)...")
+                    time.sleep(wait)
+                    last_err = e
+                else:
+                    raise
+        raise last_err or RuntimeError("Gemini transcription failed after retries")
+    raise RuntimeError("No transcription provider available")
 
 # ── Generation with fallback ───────────────────────────────────────────────────
 def _generate_gemini(transcript: str) -> str:
     response = gemini_model.generate_content(CONCEPT_PROMPT + transcript)
     return response.text
 
-def _generate_groq(transcript: str) -> str:
-    completion = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+def _generate_mistral(transcript: str) -> str:
+    response = mistral_client.chat.complete(
+        model="mistral-large-latest",
         messages=[{"role": "user", "content": CONCEPT_PROMPT + transcript}],
         max_tokens=4096,
         temperature=0.7,
     )
-    return completion.choices[0].message.content
+    return response.choices[0].message.content
 
 def _generate_local(transcript: str) -> str:
     import requests as _requests
@@ -203,8 +189,8 @@ def generate_with_fallback(transcript: str) -> tuple[str, str]:
     providers = []
     if gemini_model:
         providers.append(("Gemini", _generate_gemini))
-    if groq_client:
-        providers.append(("Groq Llama", _generate_groq))
+    if mistral_client:
+        providers.append(("Mistral", _generate_mistral))
     if not USE_CLOUD:
         providers.append(("Local Ollama", _generate_local))
 

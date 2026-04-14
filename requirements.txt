@@ -2,5 +2,5 @@ fastapi
 uvicorn[standard]
 python-multipart
 google-generativeai
-groq
+mistralai
 python-dotenv
