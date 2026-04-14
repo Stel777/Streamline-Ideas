@@ -3,30 +3,13 @@ import json
 import uuid
 import re
 import base64
+import time
 from pathlib import Path
-from datetime import datetime, date
+from datetime import date
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-
-# ── Rate limiting ──────────────────────────────────────────────────────────────
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "50"))   # max ideas per day
-MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25")) # max audio file size
-
-_rate: dict = {"date": date.today(), "count": 0}
-
-def _check_rate_limit():
-    today = date.today()
-    if _rate["date"] != today:
-        _rate["date"] = today
-        _rate["count"] = 0
-    if _rate["count"] >= DAILY_LIMIT:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Daily limit of {DAILY_LIMIT} ideas reached. Resets at midnight."
-        )
-    _rate["count"] += 1
 
 try:
     from dotenv import load_dotenv
@@ -41,21 +24,45 @@ SESSIONS_DIR = Path("sessions")
 UPLOADS_DIR.mkdir(exist_ok=True)
 SESSIONS_DIR.mkdir(exist_ok=True)
 
-# ── Mode detection ─────────────────────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-USE_CLOUD = bool(GEMINI_API_KEY)
+# ── Rate limiting ──────────────────────────────────────────────────────────────
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))
+_rate: dict = {"date": date.today(), "count": 0}
 
-if USE_CLOUD:
-    print("Mode: Cloud (Gemini API)")
+def _check_rate_limit():
+    today = date.today()
+    if _rate["date"] != today:
+        _rate["date"] = today
+        _rate["count"] = 0
+    if _rate["count"] >= DAILY_LIMIT:
+        raise HTTPException(status_code=429, detail=f"Daily limit of {DAILY_LIMIT} ideas reached. Resets at midnight.")
+    _rate["count"] += 1
+
+# ── Provider setup ─────────────────────────────────────────────────────────────
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY   = os.getenv("GROQ_API_KEY")
+USE_CLOUD      = bool(GEMINI_API_KEY or GROQ_API_KEY)
+
+gemini_model = None
+groq_client  = None
+
+if GEMINI_API_KEY:
     import google.generativeai as genai
     genai.configure(api_key=GEMINI_API_KEY)
     gemini_model = genai.GenerativeModel("gemini-2.0-flash")
-else:
+    print("Provider ready: Gemini 2.0 Flash")
+
+if GROQ_API_KEY:
+    from groq import Groq
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    print("Provider ready: Groq (Llama + Whisper)")
+
+if not USE_CLOUD:
     print("Mode: Local (Ollama + faster-whisper)")
-    import requests
+    import requests as _requests
     from faster_whisper import WhisperModel
     WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
-    OLLAMA_URL = "http://localhost:11434/api/generate"
+    OLLAMA_URL   = "http://localhost:11434/api/generate"
     OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b")
     print(f"Loading Whisper '{WHISPER_MODEL_SIZE}' model...")
     whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
@@ -64,11 +71,9 @@ else:
 # ── Prompts ────────────────────────────────────────────────────────────────────
 TRANSCRIBE_PROMPT = "Transcribe this audio accurately. Return only the transcription text, nothing else."
 
-CONCEPT_PROMPT = """You are a product designer and prototyper. Given a raw voice memo transcript of someone's idea, you will:
-1. Extract and structure the idea into a clear concept
-2. Generate a self-contained, working HTML/CSS/JS prototype that visually demonstrates the core concept
+CONCEPT_PROMPT = """You are a product designer and prototyper. Given a raw voice memo transcript of someone's idea, extract and structure the idea then generate a self-contained working HTML/CSS/JS prototype.
 
-Return ONLY valid JSON — no markdown, no code fences, no extra text — in exactly this shape:
+Return ONLY valid JSON — no markdown, no code fences, no extra text:
 {
   "title": "Short catchy name for the idea",
   "one_liner": "One sentence that captures what this is",
@@ -79,25 +84,27 @@ Return ONLY valid JSON — no markdown, no code fences, no extra text — in exa
   "prototype_html": "<!DOCTYPE html>..."
 }
 
-The prototype_html must be a complete, standalone HTML file with all CSS and JS inline.
-Make it look modern and polished — use a clean color palette, good typography, and demonstrate the core UI/UX concept.
-Do NOT use external CDN links in the prototype — keep it fully self-contained.
-The prototype should be interactive where it makes sense (buttons, inputs, mock data, etc.).
+The prototype_html must be a complete standalone HTML file with all CSS and JS inline, no external CDNs.
+Make it look modern and polished with a clean color palette and interactive elements where it makes sense.
 Return ONLY the JSON object. No explanation. No markdown.
 
 Transcript:
 """
 
-
 class GenerateRequest(BaseModel):
     session_id: str
     transcript: str
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────────
+def _is_rate_limit(e: Exception) -> bool:
+    return '429' in str(e) or 'rate_limit' in str(e).lower() or 'quota' in str(e).lower()
+
+def _retry_delay(e: Exception) -> int:
+    match = re.search(r'retry in (\d+)', str(e))
+    return int(match.group(1)) + 1 if match else 5
+
 def _parse_json(raw: str) -> dict:
     raw = raw.strip()
-    # Strip markdown code fences if present
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
     try:
@@ -106,77 +113,122 @@ def _parse_json(raw: str) -> dict:
         match = re.search(r"\{.*\}", raw, re.DOTALL)
         if match:
             return json.loads(match.group())
-        raise ValueError("No valid JSON found in response")
-
+        raise ValueError("No valid JSON in response")
 
 def _mime_type(ext: str) -> str:
-    return {
-        ".mp3": "audio/mp3",
-        ".mp4": "audio/mp4",
-        ".m4a": "audio/mp4",
-        ".wav": "audio/wav",
-        ".ogg": "audio/ogg",
-        ".webm": "audio/webm",
-    }.get(ext, "audio/webm")
+    return {".mp3":"audio/mp3",".mp4":"audio/mp4",".m4a":"audio/mp4",
+            ".wav":"audio/wav",".ogg":"audio/ogg",".webm":"audio/webm"}.get(ext,"audio/webm")
 
-
-def _gemini_with_retry(fn, retries=3):
-    import time
-    for attempt in range(retries):
-        try:
-            return fn()
-        except Exception as e:
-            msg = str(e)
-            if '429' in msg and attempt < retries - 1:
-                # Extract retry delay from error or use exponential backoff
-                import re as _re
-                match = _re.search(r'retry in (\d+)', msg)
-                wait = int(match.group(1)) + 2 if match else (2 ** attempt) * 10
-                print(f"Rate limited, retrying in {wait}s...")
-                time.sleep(wait)
-            else:
-                raise
-    raise RuntimeError("Max retries exceeded")
-
-
-def _transcribe_cloud(audio_path: Path) -> str:
+# ── Transcription with fallback ────────────────────────────────────────────────
+def _transcribe_gemini(audio_path: Path) -> str:
     ext = audio_path.suffix.lower()
     with open(audio_path, "rb") as f:
-        audio_data = f.read()
-    encoded = base64.b64encode(audio_data).decode()
-    mime = _mime_type(ext)
-    response = _gemini_with_retry(lambda: gemini_model.generate_content([
+        data = base64.b64encode(f.read()).decode()
+    response = gemini_model.generate_content([
         TRANSCRIBE_PROMPT,
-        {"mime_type": mime, "data": encoded}
-    ]))
+        {"mime_type": _mime_type(ext), "data": data}
+    ])
     return response.text.strip()
 
+def _transcribe_groq(audio_path: Path) -> str:
+    with open(audio_path, "rb") as f:
+        result = groq_client.audio.transcriptions.create(
+            file=(audio_path.name, f.read()),
+            model="whisper-large-v3-turbo",
+        )
+    return result.text.strip()
 
-def _transcribe_local(audio_path: Path) -> str:
-    segments, _ = whisper_model.transcribe(str(audio_path), beam_size=5)
+def _transcribe_local(audio_path: Path, beam_size=5) -> str:
+    segments, _ = whisper_model.transcribe(str(audio_path), beam_size=beam_size)
     return " ".join(s.text.strip() for s in segments).strip()
 
+def transcribe_with_fallback(audio_path: Path) -> tuple[str, str]:
+    """Returns (transcript, provider_used)"""
+    providers = []
+    if gemini_model:
+        providers.append(("Gemini", _transcribe_gemini))
+    if groq_client:
+        providers.append(("Groq Whisper", _transcribe_groq))
 
-def _generate_cloud(transcript: str) -> str:
-    prompt = CONCEPT_PROMPT + transcript
-    response = _gemini_with_retry(lambda: gemini_model.generate_content(prompt))
+    last_err = None
+    for name, fn in providers:
+        try:
+            print(f"Transcribing with {name}...")
+            return fn(audio_path), name
+        except Exception as e:
+            if _is_rate_limit(e):
+                wait = _retry_delay(e)
+                print(f"{name} rate limited, trying next provider... (or wait {wait}s)")
+                last_err = e
+                continue
+            raise  # non-rate-limit errors bubble up immediately
+
+    # All providers rate limited — wait and retry first available
+    if last_err and providers:
+        wait = _retry_delay(last_err)
+        print(f"All providers rate limited. Waiting {wait}s then retrying...")
+        time.sleep(wait)
+        name, fn = providers[0]
+        return fn(audio_path), name
+
+    raise last_err or RuntimeError("No transcription providers available")
+
+# ── Generation with fallback ───────────────────────────────────────────────────
+def _generate_gemini(transcript: str) -> str:
+    response = gemini_model.generate_content(CONCEPT_PROMPT + transcript)
     return response.text
 
+def _generate_groq(transcript: str) -> str:
+    completion = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
+        messages=[{"role": "user", "content": CONCEPT_PROMPT + transcript}],
+        max_tokens=4096,
+        temperature=0.7,
+    )
+    return completion.choices[0].message.content
 
 def _generate_local(transcript: str) -> str:
-    response = requests.post(
+    import requests as _requests
+    response = _requests.post(
         OLLAMA_URL,
-        json={
-            "model": OLLAMA_MODEL,
-            "prompt": CONCEPT_PROMPT + transcript,
-            "stream": False,
-            "options": {"temperature": 0.7, "num_ctx": 8192, "num_predict": 4096},
-        },
+        json={"model": OLLAMA_MODEL, "prompt": CONCEPT_PROMPT + transcript,
+              "stream": False, "options": {"temperature": 0.7, "num_ctx": 8192, "num_predict": 4096}},
         timeout=120,
     )
     response.raise_for_status()
     return response.json().get("response", "")
 
+def generate_with_fallback(transcript: str) -> tuple[str, str]:
+    """Returns (raw_json_str, provider_used)"""
+    providers = []
+    if gemini_model:
+        providers.append(("Gemini", _generate_gemini))
+    if groq_client:
+        providers.append(("Groq Llama", _generate_groq))
+    if not USE_CLOUD:
+        providers.append(("Local Ollama", _generate_local))
+
+    last_err = None
+    for name, fn in providers:
+        try:
+            print(f"Generating with {name}...")
+            return fn(transcript), name
+        except Exception as e:
+            if _is_rate_limit(e):
+                print(f"{name} rate limited, trying next provider...")
+                last_err = e
+                continue
+            raise
+
+    # All rate limited — wait and retry first
+    if last_err and providers:
+        wait = _retry_delay(last_err)
+        print(f"All providers rate limited. Waiting {wait}s then retrying...")
+        time.sleep(wait)
+        name, fn = providers[0]
+        return fn(transcript), name
+
+    raise last_err or RuntimeError("No generation providers available")
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 @app.post("/api/transcribe-chunk")
@@ -189,18 +241,17 @@ async def transcribe_chunk(file: UploadFile = File(...)):
     with open(tmp_path, "wb") as f:
         f.write(contents)
     try:
-        transcript = _transcribe_cloud(tmp_path) if USE_CLOUD else _transcribe_local_chunk(tmp_path)
+        if USE_CLOUD:
+            transcript, _ = transcribe_with_fallback(tmp_path)
+        else:
+            segments, _ = whisper_model.transcribe(str(tmp_path), beam_size=1, vad_filter=True)
+            transcript = " ".join(s.text.strip() for s in segments)
     except Exception:
         transcript = ""
     finally:
         if tmp_path.exists():
             tmp_path.unlink()
     return {"transcript": transcript.strip()}
-
-
-def _transcribe_local_chunk(audio_path: Path) -> str:
-    segments, _ = whisper_model.transcribe(str(audio_path), beam_size=1, vad_filter=True)
-    return " ".join(s.text.strip() for s in segments)
 
 
 @app.post("/api/transcribe")
@@ -210,18 +261,21 @@ async def transcribe_audio(file: UploadFile = File(...)):
     if ext not in allowed_types:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
 
+    contents = await file.read()
+    if len(contents) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_UPLOAD_MB}MB.")
+
     session_id = str(uuid.uuid4())
     audio_path = UPLOADS_DIR / f"{session_id}{ext}"
-    contents = await file.read()
-
-    if len(contents) > MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_UPLOAD_MB}MB.")
-
     with open(audio_path, "wb") as f:
         f.write(contents)
 
     try:
-        transcript = _transcribe_cloud(audio_path) if USE_CLOUD else _transcribe_local(audio_path)
+        if USE_CLOUD:
+            transcript, provider = transcribe_with_fallback(audio_path)
+            print(f"Transcribed via {provider}")
+        else:
+            transcript = _transcribe_local(audio_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
     finally:
@@ -231,25 +285,15 @@ async def transcribe_audio(file: UploadFile = File(...)):
     return {"session_id": session_id, "transcript": transcript}
 
 
-@app.get("/api/usage")
-async def get_usage():
-    today = date.today()
-    if _rate["date"] != today:
-        return {"used": 0, "limit": DAILY_LIMIT, "remaining": DAILY_LIMIT}
-    return {
-        "used": _rate["count"],
-        "limit": DAILY_LIMIT,
-        "remaining": max(0, DAILY_LIMIT - _rate["count"])
-    }
-
-
 @app.post("/api/generate")
 async def generate_concept(request: GenerateRequest):
     if not request.transcript.strip():
         raise HTTPException(status_code=400, detail="Transcript cannot be empty")
     _check_rate_limit()
+
     try:
-        raw = _generate_cloud(request.transcript) if USE_CLOUD else _generate_local(request.transcript)
+        raw, provider = generate_with_fallback(request.transcript)
+        print(f"Generated via {provider}")
         result = _parse_json(raw)
     except ValueError:
         raise HTTPException(status_code=500, detail="Model did not return valid JSON. Try regenerating.")
@@ -266,6 +310,14 @@ async def generate_concept(request: GenerateRequest):
     return result
 
 
+@app.get("/api/usage")
+async def get_usage():
+    today = date.today()
+    if _rate["date"] != today:
+        return {"used": 0, "limit": DAILY_LIMIT, "remaining": DAILY_LIMIT}
+    return {"used": _rate["count"], "limit": DAILY_LIMIT, "remaining": max(0, DAILY_LIMIT - _rate["count"])}
+
+
 @app.get("/api/sessions")
 async def list_sessions():
     sessions = []
@@ -273,11 +325,9 @@ async def list_sessions():
         try:
             with open(path) as f:
                 data = json.load(f)
-            sessions.append({
-                "session_id": data.get("session_id", path.stem),
-                "title": data.get("title", "Untitled"),
-                "one_liner": data.get("one_liner", ""),
-            })
+            sessions.append({"session_id": data.get("session_id", path.stem),
+                              "title": data.get("title", "Untitled"),
+                              "one_liner": data.get("one_liner", "")})
         except Exception:
             continue
     return sessions
