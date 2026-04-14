@@ -4,10 +4,29 @@ import uuid
 import re
 import base64
 from pathlib import Path
+from datetime import datetime, date
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+
+# ── Rate limiting ──────────────────────────────────────────────────────────────
+DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "50"))   # max ideas per day
+MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25")) # max audio file size
+
+_rate: dict = {"date": date.today(), "count": 0}
+
+def _check_rate_limit():
+    today = date.today()
+    if _rate["date"] != today:
+        _rate["date"] = today
+        _rate["count"] = 0
+    if _rate["count"] >= DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily limit of {DAILY_LIMIT} ideas reached. Resets at midnight."
+        )
+    _rate["count"] += 1
 
 try:
     from dotenv import load_dotenv
@@ -172,6 +191,10 @@ async def transcribe_audio(file: UploadFile = File(...)):
     session_id = str(uuid.uuid4())
     audio_path = UPLOADS_DIR / f"{session_id}{ext}"
     contents = await file.read()
+
+    if len(contents) > MAX_UPLOAD_MB * 1024 * 1024:
+        raise HTTPException(status_code=413, detail=f"File too large. Max size is {MAX_UPLOAD_MB}MB.")
+
     with open(audio_path, "wb") as f:
         f.write(contents)
 
@@ -186,10 +209,23 @@ async def transcribe_audio(file: UploadFile = File(...)):
     return {"session_id": session_id, "transcript": transcript}
 
 
+@app.get("/api/usage")
+async def get_usage():
+    today = date.today()
+    if _rate["date"] != today:
+        return {"used": 0, "limit": DAILY_LIMIT, "remaining": DAILY_LIMIT}
+    return {
+        "used": _rate["count"],
+        "limit": DAILY_LIMIT,
+        "remaining": max(0, DAILY_LIMIT - _rate["count"])
+    }
+
+
 @app.post("/api/generate")
 async def generate_concept(request: GenerateRequest):
     if not request.transcript.strip():
         raise HTTPException(status_code=400, detail="Transcript cannot be empty")
+    _check_rate_limit()
     try:
         raw = _generate_cloud(request.transcript) if USE_CLOUD else _generate_local(request.transcript)
         result = _parse_json(raw)
