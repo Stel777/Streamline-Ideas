@@ -25,9 +25,9 @@ UPLOADS_DIR.mkdir(exist_ok=True)
 SESSIONS_DIR.mkdir(exist_ok=True)
 
 # ── Rate limiting ──────────────────────────────────────────────────────────────
-DAILY_LIMIT = int(os.getenv("DAILY_LIMIT", "50"))
+DAILY_LIMIT   = int(os.getenv("DAILY_LIMIT", "50"))
 MAX_UPLOAD_MB = int(os.getenv("MAX_UPLOAD_MB", "25"))
-_rate: dict = {"date": date.today(), "count": 0}
+_rate: dict   = {"date": date.today(), "count": 0}
 
 def _check_rate_limit():
     today = date.today()
@@ -39,12 +39,13 @@ def _check_rate_limit():
     _rate["count"] += 1
 
 # ── Provider setup ─────────────────────────────────────────────────────────────
-GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY")
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
-USE_CLOUD       = bool(GEMINI_API_KEY or MISTRAL_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY   = os.getenv("GROQ_API_KEY")
+USE_CLOUD      = bool(GEMINI_API_KEY or GROQ_API_KEY)
 
-gemini_model   = None
-mistral_client = None
+gemini_model  = None
+groq_client   = None
+whisper_model = None
 
 if GEMINI_API_KEY:
     import google.generativeai as genai
@@ -52,14 +53,13 @@ if GEMINI_API_KEY:
     gemini_model = genai.GenerativeModel("gemini-2.0-flash")
     print("Provider ready: Gemini 2.0 Flash")
 
-if MISTRAL_API_KEY:
-    from mistralai import Mistral
-    mistral_client = Mistral(api_key=MISTRAL_API_KEY)
-    print("Provider ready: Mistral")
+if GROQ_API_KEY:
+    from groq import Groq
+    groq_client = Groq(api_key=GROQ_API_KEY)
+    print("Provider ready: Groq (Whisper + Llama 3.3 70B)")
 
 if not USE_CLOUD:
     print("Mode: Local (Ollama + faster-whisper)")
-    import requests as _requests
     from faster_whisper import WhisperModel
     WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
     OLLAMA_URL   = "http://localhost:11434/api/generate"
@@ -67,8 +67,6 @@ if not USE_CLOUD:
     print(f"Loading Whisper '{WHISPER_MODEL_SIZE}' model...")
     whisper_model = WhisperModel(WHISPER_MODEL_SIZE, device="cpu", compute_type="int8")
     print("Whisper model ready.")
-else:
-    whisper_model = None
 
 # ── Prompts ────────────────────────────────────────────────────────────────────
 TRANSCRIBE_PROMPT = "Transcribe this audio accurately. Return only the transcription text, nothing else."
@@ -99,11 +97,12 @@ class GenerateRequest(BaseModel):
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _is_rate_limit(e: Exception) -> bool:
-    return '429' in str(e) or 'rate_limit' in str(e).lower() or 'quota' in str(e).lower()
+    msg = str(e).lower()
+    return '429' in msg or 'rate_limit' in msg or 'quota' in msg
 
 def _retry_delay(e: Exception) -> int:
     match = re.search(r'retry in (\d+)', str(e))
-    return int(match.group(1)) + 1 if match else 5
+    return int(match.group(1)) + 1 if match else 10
 
 def _parse_json(raw: str) -> dict:
     raw = raw.strip()
@@ -121,7 +120,7 @@ def _mime_type(ext: str) -> str:
     return {".mp3":"audio/mp3",".mp4":"audio/mp4",".m4a":"audio/mp4",
             ".wav":"audio/wav",".ogg":"audio/ogg",".webm":"audio/webm"}.get(ext,"audio/webm")
 
-# ── Transcription with fallback ────────────────────────────────────────────────
+# ── Transcription ──────────────────────────────────────────────────────────────
 def _transcribe_gemini(audio_path: Path) -> str:
     ext = audio_path.suffix.lower()
     with open(audio_path, "rb") as f:
@@ -132,46 +131,59 @@ def _transcribe_gemini(audio_path: Path) -> str:
     ])
     return response.text.strip()
 
-def _transcribe_mistral(audio_path: Path) -> str:
-    # Mistral doesn't have audio transcription — fall through to next provider
-    raise NotImplementedError("Mistral does not support audio transcription")
+def _transcribe_groq(audio_path: Path) -> str:
+    with open(audio_path, "rb") as f:
+        result = groq_client.audio.transcriptions.create(
+            file=(audio_path.name, f.read()),
+            model="whisper-large-v3-turbo",
+        )
+    return result.text.strip()
 
 def _transcribe_local(audio_path: Path, beam_size=5) -> str:
     segments, _ = whisper_model.transcribe(str(audio_path), beam_size=beam_size)
     return " ".join(s.text.strip() for s in segments).strip()
 
 def transcribe_with_fallback(audio_path: Path) -> tuple[str, str]:
-    """Returns (transcript, provider_used). Gemini only for now — Mistral has no audio API."""
-    if gemini_model:
-        last_err = None
-        for attempt in range(3):
-            try:
-                print("Transcribing with Gemini...")
-                return _transcribe_gemini(audio_path), "Gemini"
-            except Exception as e:
-                if _is_rate_limit(e):
-                    wait = _retry_delay(e)
-                    print(f"Gemini rate limited, waiting {wait}s (attempt {attempt+1}/3)...")
-                    time.sleep(wait)
-                    last_err = e
-                else:
-                    raise
-        raise last_err or RuntimeError("Gemini transcription failed after retries")
-    raise RuntimeError("No transcription provider available")
+    """Try Gemini first, fall back to Groq on rate limit. Returns (transcript, provider)."""
+    providers = []
+    if gemini_model: providers.append(("Gemini", _transcribe_gemini))
+    if groq_client:  providers.append(("Groq Whisper", _transcribe_groq))
 
-# ── Generation with fallback ───────────────────────────────────────────────────
+    last_err = None
+    for name, fn in providers:
+        try:
+            print(f"Transcribing with {name}...")
+            return fn(audio_path), name
+        except Exception as e:
+            if _is_rate_limit(e):
+                print(f"{name} rate limited, trying next provider...")
+                last_err = e
+            else:
+                raise
+
+    # All rate limited — wait on first and retry
+    if last_err and providers:
+        wait = _retry_delay(last_err)
+        print(f"All providers rate limited. Waiting {wait}s...")
+        time.sleep(wait)
+        name, fn = providers[0]
+        return fn(audio_path), name
+
+    raise last_err or RuntimeError("No transcription provider available")
+
+# ── Generation ─────────────────────────────────────────────────────────────────
 def _generate_gemini(transcript: str) -> str:
     response = gemini_model.generate_content(CONCEPT_PROMPT + transcript)
     return response.text
 
-def _generate_mistral(transcript: str) -> str:
-    response = mistral_client.chat.complete(
-        model="mistral-large-latest",
+def _generate_groq(transcript: str) -> str:
+    completion = groq_client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
         messages=[{"role": "user", "content": CONCEPT_PROMPT + transcript}],
         max_tokens=4096,
         temperature=0.7,
     )
-    return response.choices[0].message.content
+    return completion.choices[0].message.content
 
 def _generate_local(transcript: str) -> str:
     import requests as _requests
@@ -185,14 +197,11 @@ def _generate_local(transcript: str) -> str:
     return response.json().get("response", "")
 
 def generate_with_fallback(transcript: str) -> tuple[str, str]:
-    """Returns (raw_json_str, provider_used)"""
+    """Try Gemini first, fall back to Groq on rate limit. Returns (raw_json, provider)."""
     providers = []
-    if gemini_model:
-        providers.append(("Gemini", _generate_gemini))
-    if mistral_client:
-        providers.append(("Mistral", _generate_mistral))
-    if not USE_CLOUD:
-        providers.append(("Local Ollama", _generate_local))
+    if gemini_model:  providers.append(("Gemini", _generate_gemini))
+    if groq_client:   providers.append(("Groq Llama", _generate_groq))
+    if not USE_CLOUD: providers.append(("Local Ollama", _generate_local))
 
     last_err = None
     for name, fn in providers:
@@ -203,18 +212,17 @@ def generate_with_fallback(transcript: str) -> tuple[str, str]:
             if _is_rate_limit(e):
                 print(f"{name} rate limited, trying next provider...")
                 last_err = e
-                continue
-            raise
+            else:
+                raise
 
-    # All rate limited — wait and retry first
     if last_err and providers:
         wait = _retry_delay(last_err)
-        print(f"All providers rate limited. Waiting {wait}s then retrying...")
+        print(f"All providers rate limited. Waiting {wait}s...")
         time.sleep(wait)
         name, fn = providers[0]
         return fn(transcript), name
 
-    raise last_err or RuntimeError("No generation providers available")
+    raise last_err or RuntimeError("No generation provider available")
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 @app.post("/api/transcribe-chunk")
@@ -246,7 +254,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
     ext = Path(file.filename).suffix.lower()
     if ext not in allowed_types:
         raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
-
     contents = await file.read()
     if len(contents) > MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(status_code=413, detail=f"File too large. Max {MAX_UPLOAD_MB}MB.")
@@ -255,7 +262,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
     audio_path = UPLOADS_DIR / f"{session_id}{ext}"
     with open(audio_path, "wb") as f:
         f.write(contents)
-
     try:
         if USE_CLOUD:
             transcript, provider = transcribe_with_fallback(audio_path)
@@ -267,7 +273,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
     finally:
         if audio_path.exists():
             audio_path.unlink()
-
     return {"session_id": session_id, "transcript": transcript}
 
 
@@ -276,7 +281,6 @@ async def generate_concept(request: GenerateRequest):
     if not request.transcript.strip():
         raise HTTPException(status_code=400, detail="Transcript cannot be empty")
     _check_rate_limit()
-
     try:
         raw, provider = generate_with_fallback(request.transcript)
         print(f"Generated via {provider}")
@@ -288,11 +292,9 @@ async def generate_concept(request: GenerateRequest):
 
     result["session_id"] = request.session_id
     result["transcript"] = request.transcript
-
     session_path = SESSIONS_DIR / f"{request.session_id}.json"
     with open(session_path, "w") as f:
         json.dump(result, f, indent=2)
-
     return result
 
 
