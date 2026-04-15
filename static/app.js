@@ -251,7 +251,20 @@ function streamlineApp() {
     _renderPrototype(html) {
       const frame = document.getElementById('prototype-frame');
       if (!frame || !html) return;
+      this.protoLoading = true;
       frame.srcdoc = html;
+    },
+
+    openPrototypeTab() {
+      if (!this.result.prototype_html) return;
+      const blob = new Blob([this.result.prototype_html], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    },
+
+    toggleProtoFullscreen() {
+      this.protoFullscreen = !this.protoFullscreen;
     },
 
     // ── Exports ────────────────────────────────────────────────

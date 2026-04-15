@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/style.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
-<body x-data="{ ...streamlineApp(), exportOpen: false }" x-init="init()">
+<body x-data="{ ...streamlineApp(), exportOpen: false, protoViewMode: 'desktop', protoFullscreen: false, protoLoading: false }" x-init="init()">
 
   <!-- Sidebar -->
   <aside class="sidebar" :class="{ open: sidebarOpen }">
@@ -242,12 +242,52 @@
           </div>
         </div>
 
-        <div class="prototype-panel">
+        <div class="prototype-panel" :class="{ 'proto-fullscreen-active': protoFullscreen }" id="prototype-panel">
           <div class="prototype-bar">
-            <div class="proto-dots"><span></span><span></span><span></span></div>
-            <span class="proto-label">Live Preview</span>
+            <div class="proto-dots">
+              <span class="dot dot-red"></span>
+              <span class="dot dot-yellow"></span>
+              <span class="dot dot-green"></span>
+            </div>
+            <div class="proto-address">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+              <span class="proto-address-text" x-text="result.title || 'Prototype Preview'"></span>
+            </div>
+            <div class="proto-actions">
+              <button class="proto-btn" @click="protoViewMode = protoViewMode === 'desktop' ? 'mobile' : 'desktop'" :title="protoViewMode === 'desktop' ? 'Switch to mobile view' : 'Switch to desktop view'">
+                <template x-if="protoViewMode === 'desktop'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12" y2="18"/></svg>
+                </template>
+                <template x-if="protoViewMode === 'mobile'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                </template>
+              </button>
+              <button class="proto-btn" @click="openPrototypeTab()" title="Open in new tab">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              </button>
+              <button class="proto-btn" @click="toggleProtoFullscreen()" :title="protoFullscreen ? 'Exit fullscreen' : 'Fullscreen'">
+                <template x-if="!protoFullscreen">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                </template>
+                <template x-if="protoFullscreen">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="10" y1="14" x2="21" y2="3"/><line x1="3" y1="21" x2="14" y2="10"/></svg>
+                </template>
+              </button>
+            </div>
           </div>
-          <iframe class="prototype-frame" id="prototype-frame" sandbox="allow-scripts allow-forms allow-same-origin"></iframe>
+          <div class="prototype-viewport" :class="{ 'view-mobile': protoViewMode === 'mobile' }">
+            <div class="proto-loading-overlay" x-show="protoLoading" x-transition.opacity>
+              <div class="proto-shimmer-bar" style="width:60%;height:18px;margin-bottom:12px"></div>
+              <div class="proto-shimmer-bar" style="width:80%;height:12px;margin-bottom:8px"></div>
+              <div class="proto-shimmer-bar" style="width:45%;height:12px"></div>
+            </div>
+            <iframe
+              class="prototype-frame"
+              id="prototype-frame"
+              sandbox="allow-scripts allow-forms allow-same-origin"
+              @load="protoLoading = false"
+            ></iframe>
+          </div>
         </div>
 
       </div>
