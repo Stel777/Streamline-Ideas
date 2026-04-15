@@ -71,7 +71,7 @@ if not USE_CLOUD:
 # ── Prompts ────────────────────────────────────────────────────────────────────
 TRANSCRIBE_PROMPT = "Transcribe this audio accurately. Return only the transcription text, nothing else."
 
-CONCEPT_PROMPT = """You are a product designer and prototyper. Given a raw voice memo transcript of someone's idea, extract and structure the idea then generate a self-contained working HTML/CSS/JS prototype.
+CONCEPT_PROMPT = """You are a world-class product designer and UI prototyper. Given an idea transcript, produce a structured concept AND a stunning visual prototype.
 
 Return ONLY valid JSON — no markdown, no code fences, no extra text:
 {
@@ -84,16 +84,61 @@ Return ONLY valid JSON — no markdown, no code fences, no extra text:
   "prototype_html": "<!DOCTYPE html>..."
 }
 
-The prototype_html must be a complete standalone HTML file with all CSS and JS inline, no external CDNs.
-Make it look modern and polished with a clean color palette and interactive elements where it makes sense.
+PROTOTYPE REQUIREMENTS — this is the most important part:
+- Complete standalone HTML file, all CSS and JS inline, zero external CDNs
+- Design quality: think Figma mockup, not a rough wireframe. Dark theme preferred (#0d0d14 background)
+- Typography: use system-ui or Georgia, large bold headings, clear hierarchy
+- Color: one strong accent color (violet, blue, or teal), subtle gradients, glassmorphism cards
+- Layout: multiple "screens" or sections navigable by clicking — use JS show/hide to switch between views
+- Include at least 3 interactive elements: buttons that respond, tabs that switch, a form, a list, or a dashboard
+- Populate with realistic mock data (names, numbers, dates — make it feel real)
+- Smooth CSS transitions on all interactions (0.2s ease)
+- Mobile-friendly: max-width 420px centered, like a phone app UI where appropriate
+- NO placeholder grey boxes — every section should have actual content
+- The prototype should make someone go "wow, I can see exactly what this would look like"
+
 Return ONLY the JSON object. No explanation. No markdown.
 
 Transcript:
 """
 
+INTERVIEW_SYSTEM = """You are a sharp product strategist conducting a quick discovery interview.
+Your job: ask ONE focused question at a time to uncover what makes this idea truly valuable.
+Be conversational, curious, and concise. Max 15 words per question.
+After the user answers, ask the next most important thing you still don't know.
+Cover: core user pain, key differentiator, monetisation/use case, technical feasibility concern, and the "aha moment".
+Return ONLY the question text — no preamble, no numbering, no explanation."""
+
+INTERVIEW_COMPILE = """You are a product strategist. Compile this interview into a rich idea brief.
+
+Given:
+- Original transcript
+- 5 interview Q&A pairs
+
+Return ONLY valid JSON:
+{
+  "title": "...",
+  "one_liner": "...",
+  "problem": "...",
+  "solution": "...",
+  "key_features": ["...", "...", "..."],
+  "target_user": "...",
+  "enriched_brief": "A 3-5 sentence summary capturing the full depth of the idea from the interview"
+}
+No markdown, no explanation."""
+
 class GenerateRequest(BaseModel):
     session_id: str
     transcript: str
+
+class InterviewRequest(BaseModel):
+    transcript: str
+    answers: list[dict]  # [{"question": "...", "answer": "..."}]
+
+class InterviewCompileRequest(BaseModel):
+    session_id: str
+    transcript: str
+    answers: list[dict]
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def _is_rate_limit(e: Exception) -> bool:
@@ -246,6 +291,96 @@ async def transcribe_chunk(file: UploadFile = File(...)):
         if tmp_path.exists():
             tmp_path.unlink()
     return {"transcript": transcript.strip()}
+
+
+@app.post("/api/interview")
+async def interview_question(request: InterviewRequest):
+    """Return the next interview question based on transcript + answers so far."""
+    qa_text = "\n".join(f"Q: {a['question']}\nA: {a['answer']}" for a in request.answers) if request.answers else "No answers yet."
+    prompt = f"Original idea transcript:\n{request.transcript}\n\nAnswers so far:\n{qa_text}\n\nAsk the next most important question."
+
+    def _ask_gemini():
+        r = gemini_model.generate_content([{"role": "user", "parts": [INTERVIEW_SYSTEM + "\n\n" + prompt]}])
+        return r.text.strip()
+
+    def _ask_groq():
+        c = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "system", "content": INTERVIEW_SYSTEM}, {"role": "user", "content": prompt}],
+            max_tokens=60, temperature=0.8,
+        )
+        return c.choices[0].message.content.strip()
+
+    providers = []
+    if gemini_model: providers.append(_ask_gemini)
+    if groq_client:  providers.append(_ask_groq)
+
+    for fn in providers:
+        try:
+            question = fn()
+            return {"question": question, "question_number": len(request.answers) + 1}
+        except Exception as e:
+            if _is_rate_limit(e):
+                continue
+            raise
+    raise HTTPException(status_code=503, detail="All providers unavailable")
+
+
+@app.post("/api/interview/compile")
+async def interview_compile(request: InterviewCompileRequest):
+    """Compile interview answers into enriched context, then generate concept."""
+    _check_rate_limit()
+    qa_text = "\n".join(f"Q: {a['question']}\nA: {a['answer']}" for a in request.answers)
+    prompt = f"Original transcript:\n{request.transcript}\n\nInterview Q&A:\n{qa_text}"
+
+    def _compile_gemini():
+        r = gemini_model.generate_content(INTERVIEW_COMPILE + "\n\n" + prompt)
+        return r.text
+
+    def _compile_groq():
+        c = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": INTERVIEW_COMPILE + "\n\n" + prompt}],
+            max_tokens=1024, temperature=0.5,
+        )
+        return c.choices[0].message.content
+
+    providers = []
+    if gemini_model: providers.append(_compile_gemini)
+    if groq_client:  providers.append(_compile_groq)
+
+    brief_data = {}
+    for fn in providers:
+        try:
+            raw = fn()
+            brief_data = _parse_json(raw)
+            break
+        except Exception as e:
+            if _is_rate_limit(e):
+                continue
+            raise
+
+    # Now generate full concept using the enriched brief
+    enriched_transcript = brief_data.get("enriched_brief", request.transcript)
+    try:
+        raw, provider = generate_with_fallback(enriched_transcript)
+        result = _parse_json(raw)
+    except ValueError:
+        raise HTTPException(status_code=500, detail="Model did not return valid JSON. Try regenerating.")
+
+    # Merge interview brief fields into result
+    for key in ["title", "one_liner", "problem", "solution", "key_features", "target_user"]:
+        if key in brief_data and brief_data[key]:
+            result[key] = brief_data[key]
+
+    result["session_id"] = request.session_id
+    result["transcript"] = request.transcript
+    result["interview_answers"] = request.answers
+
+    session_path = SESSIONS_DIR / f"{request.session_id}.json"
+    with open(session_path, "w") as f:
+        json.dump(result, f, indent=2)
+    return result
 
 
 @app.post("/api/transcribe")

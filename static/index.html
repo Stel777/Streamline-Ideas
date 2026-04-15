@@ -43,7 +43,7 @@
       </button>
       <div class="logo">
         <span class="logo-mark">✦</span>
-        <span class="logo-text">Streamline</span>
+        <span class="logo-text">Streamline <span class="logo-by">by Stel</span></span>
       </div>
       <button class="icon-btn new-btn" @click="resetAll()" x-show="state !== 'idle'" title="New idea">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
@@ -69,8 +69,8 @@
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
             </div>
             <div class="action-text">
-              <span class="action-label">Upload Memo</span>
-              <span class="action-sub">m4a · mp3 · wav · webm</span>
+              <span class="action-label">Upload Memo or Video</span>
+              <span class="action-sub">m4a · mp3 · wav · webm · mp4</span>
             </div>
             <input type="file" accept=".m4a,.mp3,.wav,.webm,.ogg,.mp4" x-ref="fileInput" style="display:none" @change="handleFileSelect($event)" />
           </div>
@@ -129,17 +129,58 @@
       </div>
     </main>
 
-    <!-- TRANSCRIPT: Edit & confirm -->
+    <!-- TRANSCRIPT: Review + mode choice -->
     <main class="stage" x-show="state === 'transcript'">
       <div class="transcript-panel">
         <h2 class="panel-title">Review your idea</h2>
-        <p class="panel-sub">Edit anything before generating your concept.</p>
-        <textarea class="transcript-box" x-model="transcript" rows="7" placeholder="Your transcribed idea will appear here..."></textarea>
+        <p class="panel-sub">Edit anything, then choose how to generate.</p>
+        <textarea class="transcript-box" x-model="transcript" rows="6" placeholder="Your transcribed idea will appear here..."></textarea>
+
+        <div class="mode-choice">
+          <button class="mode-card" @click="generateConcept()">
+            <div class="mode-icon">⚡</div>
+            <div class="mode-text">
+              <div class="mode-title">Quick Generate</div>
+              <div class="mode-desc">Instant concept + prototype from your transcript</div>
+            </div>
+          </button>
+          <button class="mode-card mode-card-accent" @click="startInterview()">
+            <div class="mode-icon">🎯</div>
+            <div class="mode-text">
+              <div class="mode-title">Deep Dive</div>
+              <div class="mode-desc">5 quick questions → richer, more detailed result</div>
+            </div>
+          </button>
+        </div>
+
         <div class="transcript-actions">
           <button class="btn-ghost" @click="copyTranscript()" x-text="copied ? 'Copied' : 'Copy'"></button>
-          <button class="btn-primary" @click="generateConcept()" :disabled="!transcript.trim()">
-            Generate Concept
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        </div>
+      </div>
+    </main>
+
+    <!-- INTERVIEW -->
+    <main class="stage center" x-show="state === 'interview'">
+      <div class="interview-ui">
+        <div class="interview-progress">
+          <template x-for="i in 5" :key="i">
+            <div class="progress-dot" :class="{ active: i <= interviewAnswers.length, current: i === interviewAnswers.length + 1 }"></div>
+          </template>
+        </div>
+        <p class="interview-step">Question <span x-text="interviewAnswers.length + 1"></span> of 5</p>
+        <h2 class="interview-question" x-text="currentQuestion"></h2>
+        <textarea
+          class="interview-answer"
+          x-model="currentAnswer"
+          rows="4"
+          placeholder="Type your answer..."
+          @keydown.meta.enter="submitAnswer()"
+          @keydown.ctrl.enter="submitAnswer()"
+        ></textarea>
+        <div class="interview-actions">
+          <button class="btn-ghost" @click="skipAnswer()">Skip</button>
+          <button class="btn-primary" @click="submitAnswer()" :disabled="!currentAnswer.trim()">
+            <span x-text="interviewAnswers.length < 4 ? 'Next →' : 'Generate'"></span>
           </button>
         </div>
       </div>
@@ -149,8 +190,8 @@
     <main class="stage center" x-show="state === 'generating'">
       <div class="loader-ui">
         <div class="loader-ring accent"></div>
-        <p class="loader-label">Building your concept</p>
-        <p class="loader-sub">This takes 30–90 seconds on local AI.</p>
+        <p class="loader-label" x-text="generatingLabel"></p>
+        <p class="loader-sub">Hang tight...</p>
       </div>
     </main>
 
