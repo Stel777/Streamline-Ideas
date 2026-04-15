@@ -586,28 +586,35 @@ body::before {
 .dot-yellow { background: #febc2e; }
 .dot-green  { background: #28c840; }
 
-/* Address bar */
-.proto-address {
+/* Tab switcher */
+.proto-tabs {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: rgba(0,0,0,0.2);
-  border: 1px solid rgba(255,255,255,0.07);
-  border-radius: 8px;
-  padding: 5px 10px;
-  min-width: 0;
-  max-width: 380px;
-  margin: 0 auto;
+  justify-content: center;
+  gap: 3px;
 }
-.proto-address-text {
-  font-size: 11.5px;
-  color: var(--text-2);
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.proto-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 13px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
   letter-spacing: -0.1px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  font-family: var(--font);
+  transition: background 0.15s, color 0.15s;
+}
+.proto-tab:hover { background: var(--surface-hover); color: var(--text-2); }
+.proto-tab.active {
+  background: rgba(139,92,246,0.15);
+  color: var(--accent-2);
+  border: 1px solid rgba(139,92,246,0.25);
 }
 
 /* Action buttons */

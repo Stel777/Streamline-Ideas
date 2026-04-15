@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/style.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
 </head>
-<body x-data="{ ...streamlineApp(), exportOpen: false, protoViewMode: 'desktop', protoFullscreen: false, protoLoading: false }" x-init="init()">
+<body x-data="{ ...streamlineApp(), exportOpen: false }" x-init="init()">
 
   <!-- Sidebar -->
   <aside class="sidebar" :class="{ open: sidebarOpen }">
@@ -249,9 +249,15 @@
               <span class="dot dot-yellow"></span>
               <span class="dot dot-green"></span>
             </div>
-            <div class="proto-address">
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="opacity:0.4"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
-              <span class="proto-address-text" x-text="result.title || 'Prototype Preview'"></span>
+            <div class="proto-tabs">
+              <button class="proto-tab" :class="{ active: protoTab === 'card' }" @click="switchProtoTab('card')">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                Concept
+              </button>
+              <button class="proto-tab" :class="{ active: protoTab === 'prototype' }" @click="switchProtoTab('prototype')">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+                Prototype
+              </button>
             </div>
             <div class="proto-actions">
               <button class="proto-btn" @click="protoViewMode = protoViewMode === 'desktop' ? 'mobile' : 'desktop'" :title="protoViewMode === 'desktop' ? 'Switch to mobile view' : 'Switch to desktop view'">
