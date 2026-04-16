@@ -71,33 +71,57 @@ if not USE_CLOUD:
 # ── Prompts ────────────────────────────────────────────────────────────────────
 TRANSCRIBE_PROMPT = "Transcribe this audio accurately. Return only the transcription text, nothing else."
 
-CONCEPT_PROMPT = """You are a world-class product designer and UI prototyper. Given an idea transcript, produce a structured concept AND a stunning visual prototype.
+CONCEPT_PROMPT = """You are a world-class product designer and senior frontend engineer. Given an idea transcript, return a concept brief AND a stunning, production-quality interactive HTML prototype.
 
-Return ONLY valid JSON — no markdown, no code fences, no extra text:
+Return ONLY valid JSON (no markdown, no code fences, no text before or after):
 {
-  "title": "Short catchy name for the idea",
-  "one_liner": "One sentence that captures what this is",
-  "problem": "The problem this solves",
-  "solution": "How the idea solves it",
-  "key_features": ["Feature 1", "Feature 2", "Feature 3"],
-  "target_user": "Who this is for",
+  "title": "Short catchy product name",
+  "one_liner": "Exactly what this product does in one crisp sentence",
+  "problem": "The specific pain point this solves",
+  "solution": "How it elegantly solves it",
+  "key_features": ["Feature 1", "Feature 2", "Feature 3", "Feature 4", "Feature 5"],
+  "target_user": "Precise description of the ideal user",
   "prototype_html": "<!DOCTYPE html>..."
 }
 
-PROTOTYPE REQUIREMENTS — this is the most important part:
-- Complete standalone HTML file, all CSS and JS inline, zero external CDNs
-- Design quality: think Figma mockup, not a rough wireframe. Dark theme preferred (#0d0d14 background)
-- Typography: use system-ui or Georgia, large bold headings, clear hierarchy
-- Color: one strong accent color (violet, blue, or teal), subtle gradients, glassmorphism cards
-- Layout: multiple "screens" or sections navigable by clicking — use JS show/hide to switch between views
-- Include at least 3 interactive elements: buttons that respond, tabs that switch, a form, a list, or a dashboard
-- Populate with realistic mock data (names, numbers, dates — make it feel real)
-- Smooth CSS transitions on all interactions (0.2s ease)
-- Mobile-friendly: max-width 420px centered, like a phone app UI where appropriate
-- NO placeholder grey boxes — every section should have actual content
-- The prototype should make someone go "wow, I can see exactly what this would look like"
+━━━ PROTOTYPE — NON-NEGOTIABLE REQUIREMENTS ━━━
+Standard: this must look like a real shipped product from a top-tier startup, not a student project.
 
-Return ONLY the JSON object. No explanation. No markdown.
+VISUAL DESIGN:
+• Background: #0a0a12 or #080814
+• Cards/surfaces: rgba(255,255,255,0.05) with 1px rgba(255,255,255,0.09) border, 16-20px radius
+• ONE accent color — violet #7c3aed, electric blue #2563eb, teal #0d9488, or rose #e11d48 — used consistently on buttons, active states, metrics
+• Gradient glow behind hero: radial-gradient(ellipse at top, accent at 12% opacity, transparent)
+• Typography: -apple-system or system-ui; headings 700-800 weight, -1px letter-spacing, line-height 1.1
+• Generous spacing: 24-40px padding inside cards, 32-48px between sections
+• ALL hover/active states: transition: all 0.18s ease
+
+REQUIRED STRUCTURE:
+1. Fixed top nav — logo/name left, 3 nav links right, subtle bottom border
+2. At least 3 distinct screens/views switchable by clicking nav links (JS classList show/hide)
+3. Screen 1: Hero or dashboard — bold headline, key metric or stat, primary CTA
+4. Screen 2: Data-rich view — list, feed, table, or card grid with 6-8 real items
+5. Screen 3: Detail or form view — item detail, profile, settings, or creation form
+
+INTERACTIONS:
+• Nav: active link has accent underline or left-border; clicking switches screens
+• Primary button: solid accent fill, hover: slightly darker + scale(0.97)
+• Cards: hover lifts background rgba(255,255,255,0.03), border brightens
+• At least ONE working toggle, tab switch, or expandable item inside the prototype
+
+CONTENT (critical — no exceptions):
+• ZERO placeholder text — every word is specific to THIS concept
+• Realistic names, numbers, dates tailored to this exact idea
+• Dashboard metrics use plausible real numbers
+• Lists/feeds have 6-8 varied items, not 3 identical ones
+• If there are users/people, give them real first + last names
+
+TECHNICAL:
+• All CSS and JS inline — ONE Google Fonts link allowed, nothing else external
+• Mobile-responsive: flexbox/grid, no hardcoded pixel widths except max-width containers
+• If it's a mobile app concept: max-width 420px centered; if web app: full-width layout
+
+Return ONLY the JSON. No text before or after. No markdown fences.
 
 Transcript:
 """

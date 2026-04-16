@@ -697,6 +697,21 @@ body::before {
   display: block;
 }
 
+/* ── Result entrance ────────────────────────────────────── */
+.result-enter { transition: opacity 0.5s ease, transform 0.6s cubic-bezier(0.16,1,0.3,1); }
+.result-enter-from { opacity: 0; transform: translateY(18px); }
+.result-enter-to { opacity: 1; transform: translateY(0); }
+
+/* ── Featured export option ─────────────────────────────── */
+.export-option-featured {
+  border-color: rgba(139,92,246,0.3) !important;
+  background: rgba(139,92,246,0.07) !important;
+}
+.export-option-featured:hover {
+  background: rgba(139,92,246,0.13) !important;
+  border-color: rgba(139,92,246,0.5) !important;
+}
+
 /* ── Toast ──────────────────────────────────────────────── */
 .toast {
   position: fixed;
@@ -713,6 +728,13 @@ body::before {
   cursor: pointer;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   backdrop-filter: blur(10px);
+}
+
+/* ── Success toast ──────────────────────────────────────── */
+.toast-success {
+  background: rgba(139,92,246,0.92) !important;
+  cursor: default !important;
+  pointer-events: none;
 }
 
 /* ── Mode choice (Quick vs Deep Dive) ───────────────────── */

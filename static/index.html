@@ -196,7 +196,10 @@
     </main>
 
     <!-- RESULT -->
-    <main class="stage result-stage" x-show="state === 'result'">
+    <main class="stage result-stage" x-show="state === 'result'"
+          x-transition:enter="result-enter"
+          x-transition:enter-start="result-enter-from"
+          x-transition:enter-end="result-enter-to">
       <div class="result-layout">
 
         <div class="concept-panel">
@@ -312,6 +315,15 @@
 
         <div class="export-list">
 
+          <button class="export-option export-option-featured" @click="exportPitch(); exportOpen = false">
+            <div class="export-option-icon">🚀</div>
+            <div class="export-option-text">
+              <div class="export-option-title">Pitch Deck</div>
+              <div class="export-option-desc">Beautiful scrollable pitch page. Share the link or open in a browser to present.</div>
+            </div>
+            <div class="export-option-size">~8 KB</div>
+          </button>
+
           <button class="export-option" @click="exportMarkdown(); exportOpen = false">
             <div class="export-option-icon">📄</div>
             <div class="export-option-text">
@@ -351,6 +363,9 @@
         </div>
       </div>
     </div>
+
+    <!-- Success toast -->
+    <div class="toast toast-success" x-show="successMsg" x-transition x-text="successMsg"></div>
 
     <!-- Error toast -->
     <div class="toast" x-show="errorMsg" x-transition x-text="errorMsg" @click="errorMsg = ''"></div>
